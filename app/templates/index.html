@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FastAPI WebSocket Chat — OTEL Demo</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d2e;
+            --border: #2d3250;
+            --accent: #6c5ce7;
+            --accent-hover: #7e6ff0;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --success: #22c55e;
+            --warning: #facc15;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        h1 {
+            font-size: 1.6rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .subtitle {
+            color: var(--muted);
+            font-size: 0.85rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .chat-container {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 100%;
+            max-width: 640px;
+            display: flex;
+            flex-direction: column;
+            height: 520px;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.8rem;
+            color: var(--muted);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+        }
+
+        .status-dot.connected {
+            background: var(--success);
+            box-shadow: 0 0 6px var(--success);
+        }
+
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .message {
+            padding: 0.5rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            max-width: 85%;
+            word-wrap: break-word;
+        }
+
+        .message.system {
+            align-self: center;
+            background: transparent;
+            color: var(--muted);
+            font-size: 0.8rem;
+            text-align: center;
+        }
+
+        .message.sent {
+            align-self: flex-end;
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .message.received {
+            align-self: flex-start;
+            background: var(--border);
+            color: var(--text);
+        }
+
+        .input-area {
+            padding: 1rem 1.25rem;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 0.65rem 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 0.9rem;
+            outline: none;
+            transition: border 0.2s;
+        }
+
+        input[type="text"]:focus {
+            border-color: var(--accent);
+        }
+
+        button {
+            padding: 0.65rem 1.25rem;
+            border: none;
+            border-radius: 8px;
+            background: var(--accent);
+            color: #fff;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover { background: var(--accent-hover); }
+        button:disabled { opacity: 0.4; cursor: default; }
+
+        .info-bar {
+            text-align: center;
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>⚡ FastAPI WebSocket Chat</h1>
+    <p class="subtitle">Instrumented with OpenTelemetry → Splunk Observability Cloud</p>
+
+    <div class="chat-container">
+        <div class="chat-header">
+            <span id="clientLabel">—</span>
+            <span class="status-badge">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">Disconnected</span>
+            </span>
+        </div>
+
+        <div id="messages"></div>
+
+        <div class="input-area">
+            <input type="text" id="messageInput" placeholder="Type a message…"
+                   disabled autocomplete="off" />
+            <button id="sendBtn" disabled onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <p class="info-bar">
+        Open multiple browser tabs to simulate a multi-user chat.
+    </p>
+
+    <script>
+        // Generate a random client ID
+        const clientId = "user-" + Math.random().toString(36).substring(2, 8);
+        document.getElementById("clientLabel").textContent = clientId;
+
+        const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
+        const ws = new WebSocket(`${wsProtocol}://${location.host}/ws/${clientId}`);
+
+        const messagesDiv = document.getElementById("messages");
+        const messageInput = document.getElementById("messageInput");
+        const sendBtn      = document.getElementById("sendBtn");
+        const statusDot    = document.getElementById("statusDot");
+        const statusText   = document.getElementById("statusText");
+
+        function appendMessage(text, type) {
+            const el = document.createElement("div");
+            el.classList.add("message", type);
+            el.textContent = text;
+            messagesDiv.appendChild(el);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        ws.onopen = () => {
+            statusDot.classList.add("connected");
+            statusText.textContent = "Connected";
+            messageInput.disabled = false;
+            sendBtn.disabled = false;
+            messageInput.focus();
+        };
+
+        ws.onmessage = (event) => {
+            const data = event.data;
+            if (data.includes("joined") || data.includes("left")) {
+                appendMessage(data, "system");
+            } else if (data.includes(`${clientId}:`)) {
+                // Our own message echoed back
+                appendMessage(data, "sent");
+            } else {
+                appendMessage(data, "received");
+            }
+        };
+
+        ws.onclose = () => {
+            statusDot.classList.remove("connected");
+            statusText.textContent = "Disconnected";
+            messageInput.disabled = true;
+            sendBtn.disabled = true;
+            appendMessage("Connection closed.", "system");
+        };
+
+        ws.onerror = () => {
+            appendMessage("⚠️ WebSocket error.", "system");
+        };
+
+        function sendMessage() {
+            const text = messageInput.value.trim();
+            if (!text) return;
+            ws.send(text);
+            messageInput.value = "";
+            messageInput.focus();
+        }
+
+        messageInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") sendMessage();
+        });
+    </script>
+</body>
+</html>
