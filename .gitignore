@@ -9,4 +9,3 @@ dist/
 build/
 .mypy_cache/
 .pytest_cache/
-confluence-page.md
